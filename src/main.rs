@@ -1,4 +1,4 @@
-use cempedak::*;
+use protohackers::*;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]

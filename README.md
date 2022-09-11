@@ -1,3 +1,3 @@
-# Cempedak
+# Protohackers
 
 https://protohackers.com/
