@@ -8,17 +8,19 @@ async fn main() {
         .with_thread_ids(true)
         .init();
 
-    let problem: u8 = std::env::args()
+    let problem: Option<u8> = std::env::args()
         .skip(1)
         .next()
-        .expect("missing argument for problem number")
-        .parse()
-        .expect("expecting number for problem number argument");
+        .map(|x| x.parse())
+        .transpose()
+        .ok()
+        .flatten();
 
     match problem {
-        0 => echo_server::run().await.unwrap(),
-        1 => is_prime_server::run().await.unwrap(),
-        2 => price_store_server::run().await.unwrap(),
-        _ => panic!("unknown problem"),
+        Some(0) => echo_server::run().await.unwrap(),
+        Some(1) => prime_validator_server::run().await.unwrap(),
+        Some(2) => price_store_server::run().await.unwrap(),
+        Some(3) => chat_server::run().await.unwrap(),
+        _ => println!("unknown problem"),
     }
 }

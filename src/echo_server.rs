@@ -2,6 +2,7 @@ use anyhow::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    task,
 };
 use tracing::info;
 
@@ -14,7 +15,7 @@ async fn run_server() -> Result<(), Error> {
         info!("waiting for new connection");
         let (stream, addr) = listener.accept().await?;
         info!("received connection from {}", addr);
-        tokio::task::spawn(handle_client(stream));
+        task::spawn(handle_client(stream));
     }
 }
 
