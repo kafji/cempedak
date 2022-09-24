@@ -1,3 +1,19 @@
+//! A chat room server.
+//!
+//! Unlike previous problems, this requires shared state between clients.
+//!
+//! My solution was to have a shared mutex across client tasks where any of
+//! those tasks can mutate the shared memory and send messages to other peers.
+//! That solution was working, however it is difficult for me to reason about
+//! its execution and debugging it is just not.. fun.
+//!
+//! The second solution, this one, is to use a message passing communication
+//! between tasks with no memory sharing similar to Erlang/Elixir
+//! server/process. Here we have 1 task that controls the room data
+//! [spawn_room_task], this task will take messages from user tasks
+//! [spawn_user_task] and will inform changes in its state to the other user
+//! tasks by sending messages to each of them.
+
 use anyhow::{Context, Error};
 use bytes::{Buf, BytesMut};
 use futures::{stream::FuturesUnordered, TryStreamExt};
@@ -20,16 +36,19 @@ use tracing::{error, info};
 
 async fn run_server() -> Result<(), Error> {
     let addr = "0.0.0.0:3000";
+
     info!("listening at {}", addr);
     let listener = TcpListener::bind(addr).await?;
 
+    // spawn the room task
     let (room_tx, room_rx) = mpsc::channel(1);
-    spawn_room_service(room_rx);
+    spawn_room_task(room_rx);
 
     loop {
         let (stream, peer_addr) = listener.accept().await?;
 
-        task::spawn(spawn_user_service(peer_addr, stream, room_tx.clone()));
+        // spawn new user task for each new client
+        task::spawn(spawn_user_task(stream, peer_addr, room_tx.clone()));
     }
 }
 
@@ -61,7 +80,7 @@ enum RoomEvent {
     },
 }
 
-fn spawn_room_service(mut event_rx: mpsc::Receiver<RoomEvent>) -> JoinHandle<()> {
+fn spawn_room_task(mut event_rx: mpsc::Receiver<RoomEvent>) -> JoinHandle<()> {
     task::spawn(async move {
         let mut users: HashMap<_, mpsc::Sender<Arc<UserEvent>>> = HashMap::new();
 
@@ -137,14 +156,15 @@ enum UserEvent {
     UserLeft { name: String },
 }
 
-async fn spawn_user_service(
-    addr: SocketAddr,
+async fn spawn_user_task(
     mut stream: TcpStream,
+    addr: SocketAddr,
     room_tx: mpsc::Sender<RoomEvent>,
 ) {
+    // shared memory for name between the main task and its cleanup part
     let cleanup_name: Arc<Mutex<Option<String>>> = Default::default();
 
-    let r = {
+    let main = {
         let room_tx = room_tx.clone();
         let cleanup_name = cleanup_name.clone();
 
@@ -187,21 +207,18 @@ async fn spawn_user_service(
 
             let (user_event_tx, mut user_event_rx) = mpsc::channel(1);
 
-            let (members_tx, members_rx) = oneshot::channel();
+            let (join_result_tx, join_result_rx) = oneshot::channel();
 
             room_tx
                 .send(RoomEvent::UserJoined {
                     name: name.clone(),
                     user_event_tx,
-                    result_tx: members_tx,
+                    result_tx: join_result_tx,
                 })
                 .await
                 .expect("failed to send user joined room event");
 
-            outbox.set_name(&name);
-            inbox.set_name(&name);
-
-            match members_rx.await.expect("failed to receive member list") {
+            match join_result_rx.await.expect("failed to receive member list") {
                 UserJoinedResult::Ok { members } => {
                     let msg = members.iter().enumerate().fold(
                         String::from("* The room contains: "),
@@ -219,24 +236,27 @@ async fn spawn_user_service(
                         .send_message(&msg)
                         .await
                         .expect("failed to send member list message");
-                },
+
+                    outbox.set_name(&name);
+                    inbox.set_name(&name);
+
+                    let mut cleanup_name = cleanup_name.lock().unwrap();
+                    cleanup_name.replace(name.clone());
+                }
+
                 UserJoinedResult::Duplicate => {
                     info!(?name, "duplicate name");
 
                     outbox.send_message("duplicate name").await.ok();
 
                     return ();
-                },
-            }
-
-
-            {
-                let mut cleanup_name = cleanup_name.lock().unwrap();
-                cleanup_name.replace(name.clone());
+                }
             }
 
             loop {
                 select! { biased;
+
+                    // listen for message from client
                     Ok(msg) = inbox.recv_message() => {
                         room_tx
                             .send(RoomEvent::NewChatMessage { name: name.clone(), message: msg })
@@ -244,6 +264,8 @@ async fn spawn_user_service(
                             .expect("failed to send new chat message room event");
                     }
 
+                    // 'poll' for disconnection status
+                    // the sleep provides window for receiving message from the room task (next select! arm)
                     _ = tokio::time::sleep(Duration::from_millis(20)) => {
                         let readiness = write.ready(Interest::READABLE.add(Interest::WRITABLE))
                             .await
@@ -254,6 +276,7 @@ async fn spawn_user_service(
                         }
                     }
 
+                    // listen for message from the room task
                     Some(event) = user_event_rx.recv() => {
                         let mut outbox = Outbox {
                             peer_addr: addr,
@@ -279,12 +302,16 @@ async fn spawn_user_service(
                 }
             }
         })
-    }.await;
-
-    let name = {
-        let mut lock = cleanup_name.lock().unwrap();
-        lock.take()
     };
+
+    // wait for the main task to complete
+    let main_result = main.await;
+
+    // the completion of main task denotes that the client has disconnected
+
+    // do cleanup
+
+    let name = Arc::try_unwrap(cleanup_name).unwrap().into_inner().unwrap();
 
     info!(?name, "user disconnected");
 
@@ -295,7 +322,7 @@ async fn spawn_user_service(
             .expect("failed to send user left room event");
     }
 
-    if let Err(err) = r {
+    if let Err(err) = main_result {
         error!(?name, ?err);
     }
 }

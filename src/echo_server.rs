@@ -1,4 +1,5 @@
-use anyhow::Error;
+use anyhow::{Context, Error};
+use std::net::SocketAddr;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -8,30 +9,45 @@ use tracing::info;
 
 async fn run_server() -> Result<(), Error> {
     let addr = "0.0.0.0:3000";
+
     info!("listening at {}", addr);
     let listener = TcpListener::bind(addr).await?;
 
     loop {
-        info!("waiting for new connection");
-        let (stream, addr) = listener.accept().await?;
-        info!("received connection from {}", addr);
-        task::spawn(handle_client(stream));
+        let (stream, peer_addr) = listener.accept().await?;
+
+        info!(?peer_addr, "received connection");
+
+        task::spawn(handle_client(stream, peer_addr));
     }
 }
 
-async fn handle_client(mut stream: TcpStream) -> Result<(), Error> {
-    let peer_addr = stream.peer_addr()?;
+async fn handle_client(mut stream: TcpStream, addr: SocketAddr) -> Result<(), Error> {
+    let peer_addr = addr;
+
     loop {
+        // assume we will never read data bigger than 1 kb
         let mut buf = [0; 1024];
-        info!("waiting for data from {}", peer_addr);
-        let size = stream.read(&mut buf).await?;
-        info!(size, "received data from {}", peer_addr);
+
+        let size = stream.read(&mut buf).await.context("failed to read data")?;
+
+        info!(?peer_addr, size, "received data");
+
+        debug_assert!(buf.len() > 0);
         if size == 0 {
+            info!(?peer_addr, "eof");
             break;
         }
-        stream.write_all(&buf[..size]).await?;
+
+        // write the received data back
+        stream
+            .write_all(&buf[..size])
+            .await
+            .context("failed to write data back")?;
     }
-    info!("connection with {} was terminated", peer_addr);
+
+    info!(?peer_addr, "connection terminated");
+
     Ok(())
 }
 
