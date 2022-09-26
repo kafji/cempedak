@@ -327,21 +327,21 @@ async fn spawn_user_task(
     }
 }
 
-struct Outbox<'a, W> {
-    peer_addr: SocketAddr,
-    write: &'a mut W,
-    name: Option<&'a str>,
+pub struct Outbox<'a, W> {
+    pub peer_addr: SocketAddr,
+    pub write: &'a mut W,
+    pub name: Option<&'a str>,
 }
 
 impl<'a, W> Outbox<'a, W>
 where
     W: AsyncWrite + Unpin,
 {
-    fn set_name(&mut self, name: &'a str) {
+    pub fn set_name(&mut self, name: &'a str) {
         self.name.replace(name);
     }
 
-    async fn send_message(&mut self, msg: &str) -> Result<(), Error> {
+    pub async fn send_message(&mut self, msg: &str) -> Result<(), Error> {
         let mut buf = msg.to_owned();
         buf.push('\n');
 
@@ -356,23 +356,24 @@ where
     }
 }
 
-struct Inbox<'a, R> {
-    peer_addr: SocketAddr,
-    read_buf: &'a mut BytesMut,
-    read: &'a mut R,
-    msg_buf: &'a mut String,
-    name: Option<&'a str>,
+pub struct Inbox<'a, R> {
+    pub peer_addr: SocketAddr,
+    pub read_buf: &'a mut BytesMut,
+    pub read: &'a mut R,
+    pub msg_buf: &'a mut String,
+    pub name: Option<&'a str>,
 }
 
 impl<'a, R> Inbox<'a, R>
 where
     R: AsyncRead + Unpin,
 {
-    fn set_name(&mut self, name: &'a str) {
+    pub fn set_name(&mut self, name: &'a str) {
         self.name.replace(name);
     }
 
-    async fn recv_message(&mut self) -> Result<String, Error> {
+    /// Cancel-safe async IO bytestream read for newline-terminated message.
+    pub async fn recv_message(&mut self) -> Result<String, Error> {
         let msg = loop {
             let read = self
                 .read
@@ -412,11 +413,11 @@ where
     }
 }
 
-fn is_valid_name(name: &str) -> bool {
+pub fn is_valid_name(name: &str) -> bool {
     !name.is_empty() && is_alphanumeric(name)
 }
 
-fn is_alphanumeric(s: &str) -> bool {
+pub fn is_alphanumeric(s: &str) -> bool {
     for c in s.chars() {
         match c {
             'a'..='z' => continue,
