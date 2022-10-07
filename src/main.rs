@@ -26,6 +26,7 @@ async fn main() {
         Some(1) => prime_validator_server::run().await.unwrap(),
         Some(2) => price_store_server::run().await.unwrap(),
         Some(3) => chat_server2::run().await.unwrap(),
+        Some(4) => udp_kv_server::run().await.unwrap(),
         Some(n) => println!("unknown problem, was {}", n),
         None => println!("missing problem argument"),
     }
